@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
+import 'state/aws_settings.dart';
 import 'state/session.dart';
 import 'theme.dart';
 
@@ -16,8 +17,11 @@ class UplinkApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (_) => SessionController()..load(),
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => SessionController()..load()),
+        ChangeNotifierProvider(create: (_) => AwsSettings()..load()),
+      ],
       child: MaterialApp(
         title: 'Uplink',
         debugShowCheckedModeBanner: false,

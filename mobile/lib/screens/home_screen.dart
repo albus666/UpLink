@@ -11,6 +11,7 @@ import 'compose_screen.dart';
 import 'git_screen.dart';
 import 'settings_screen.dart';
 import 'task_screen.dart';
+import 'aws_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -121,6 +122,15 @@ class _HomeScreenState extends State<HomeScreen> {
                                     if (mounted) _reload();
                                   },
                                   child: const Text('Git 操作'),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: () {
+                                    Navigator.push(context, MaterialPageRoute(builder: (_) => const AwsScreen()));
+                                  },
+                                  child: const Text('AWS'),
                                 ),
                               ),
                             ],

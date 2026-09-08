@@ -10,5 +10,6 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
     expect(find.text('Uplink'), findsOneWidget);
+    expect(find.text('管理 AWS 服务器'), findsOneWidget);
   });
 }

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api/api_client.dart';
 import '../state/session.dart';
 import '../theme.dart';
+import 'aws_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -81,6 +82,13 @@ class _LoginScreenState extends State<LoginScreen> {
               const SizedBox(height: 14),
               Text(_error!, style: const TextStyle(color: PilotColors.bad)),
             ],
+            const SizedBox(height: 16),
+            OutlinedButton(
+              onPressed: () {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const AwsScreen()));
+              },
+              child: const Text('管理 AWS 服务器'),
+            ),
             const SizedBox(height: 28),
             const Text(
               '模拟器访问本机用 http://10.0.2.2:8787\n真机请填电脑或 Linux 的局域网 IP，并保证同一 Wi-Fi。',

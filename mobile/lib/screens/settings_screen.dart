@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../state/session.dart';
 import '../theme.dart';
+import 'aws_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -24,6 +25,13 @@ class SettingsScreen extends StatelessWidget {
             contentPadding: EdgeInsets.zero,
             title: Text('登录方式'),
             subtitle: Text('共享口令（APP_TOKEN）', style: TextStyle(color: PilotColors.muted)),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('AWS 服务器'),
+            subtitle: const Text('用 IAM 密钥直接管 EC2 和安全组', style: TextStyle(color: PilotColors.muted)),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AwsScreen())),
           ),
           const SizedBox(height: 12),
           const Text(
