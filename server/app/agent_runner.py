@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import signal
+import uuid
 from typing import Any
 
 from .config import Settings
@@ -19,7 +20,8 @@ PROMPT_PREFIX = """你在一台服务器的本地工作区里执行任务。手�
 
 硬性规则：
 - 可修改工作区文件，也可在需要时使用 sudo、改 nginx / systemd / 防火墙 / SSH、读写 .env 与密钥
-- 涉及 nginx、systemd、防火墙、SSH、/etc/、.env、.ssh、私钥、token 等敏感操作时，系统会在手机 App 弹窗让用户确认后再继续
+- 改系统服务、写 /etc/、.env、私钥时，系统会暂停当前这一轮，等手机 App 确认后再继续，不要自己重发任务
+- 只读查询（ls、status、ss、curl 探测、读配置）无需确认，直接执行
 - 常规读写与命令无需额外确认，直接执行
 - 除非用户明确要求，否则不要 git push
 - 回复用中文，简洁说明你改了什么
@@ -52,6 +54,7 @@ class AgentRunner:
         self._current_proc: asyncio.subprocess.Process | None = None
         self._current_task_id: str | None = None
         self._cancel_requested = False
+        self._approval_decisions: dict[str, asyncio.Future[bool]] = {}
 
     def start(self) -> None:
         if self._worker is None:
@@ -81,17 +84,70 @@ class AgentRunner:
             self.store.append_log(task_id, "system", "任务在排队时被取消")
             return True
         if task["status"] == "awaiting_approval":
+            self._cancel_requested = True
+            self.store.append_log(task_id, "system", "等待确认时已取消")
+            fut = self._approval_decisions.get(task_id)
+            if fut is not None and not fut.done():
+                fut.set_result(False)
+                return True
             self.store.clear_pending_approval(task_id)
             self.store.mark_finished(task_id, "cancelled", error="已取消")
-            self.store.append_log(task_id, "system", "等待确认时已取消")
             return True
         if self._current_task_id != task_id:
             return False
         self._cancel_requested = True
         self.store.append_log(task_id, "system", "已停止这一轮")
+        fut = self._approval_decisions.get(task_id)
+        if fut is not None and not fut.done():
+            fut.set_result(False)
         proc = self._current_proc
         if proc is not None:
             asyncio.create_task(_ensure_dead(proc))
+        return True
+
+    def resolve_approval(self, task_id: str, approved: bool) -> bool:
+        fut = self._approval_decisions.get(task_id)
+        if fut is None or fut.done():
+            return False
+        fut.set_result(approved)
+        return True
+
+    async def _pause_for_approval(
+        self,
+        task_id: str,
+        proc: asyncio.subprocess.Process,
+        verdict: Any,
+    ) -> bool:
+        payload = verdict.to_dict()
+        payload["id"] = uuid.uuid4().hex
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[bool] = loop.create_future()
+        self._approval_decisions[task_id] = fut
+        self.store.set_pending_approval(task_id, payload)
+        self.store.append_log(task_id, "approval", verdict.summary)
+        self.store.append_log(task_id, "system", "等待手机 App 确认敏感操作")
+        self.store.mark_awaiting_approval(task_id)
+        _pause_process(proc)
+        try:
+            approved = await fut
+        finally:
+            self._approval_decisions.pop(task_id, None)
+
+        if not approved or self._cancel_requested:
+            await _ensure_dead(proc)
+            self.store.clear_pending_approval(task_id)
+            current = self.store.get_task(task_id, include_logs=False)
+            if current and current["status"] not in {"cancelled", "failed", "succeeded"}:
+                error = "已取消" if self._cancel_requested else "用户拒绝敏感操作"
+                if not self._cancel_requested:
+                    self.store.append_log(task_id, "system", "用户已拒绝敏感操作")
+                self.store.mark_finished(task_id, "cancelled", error=error)
+            return False
+
+        self.store.clear_pending_approval(task_id)
+        self.store.mark_running(task_id)
+        self.store.append_log(task_id, "system", "用户已批准，继续执行")
+        _resume_process(proc)
         return True
 
     async def _loop(self) -> None:
@@ -246,18 +302,14 @@ class AgentRunner:
 
                     verdict = check_tool_call(event.get("tool_call") or {})
                     if verdict.sensitive:
-                        self.store.set_pending_approval(task_id, verdict.to_dict())
-                        self.store.append_log(task_id, "approval", verdict.summary)
-                        self.store.append_log(task_id, "system", "等待手机 App 确认敏感操作")
-                        _stop_process(proc)
-                        await _ensure_dead(proc)
-                        await _wait_silent_task(stderr_task)
-                        self.store.mark_finished(
-                            task_id,
-                            "awaiting_approval",
-                            session_id=session_id,
-                        )
-                        return
+                        if extra_session := event.get("session_id"):
+                            if not session_id:
+                                session_id = str(extra_session)
+                                self.store.set_session_id(task_id, session_id)
+                        approved = await self._pause_for_approval(task_id, proc, verdict)
+                        if not approved:
+                            await _wait_silent_task(stderr_task)
+                            return
                 kind, text, extra = _format_event(event)
                 if extra.get("session_id") and not session_id:
                     session_id = str(extra["session_id"])
@@ -431,9 +483,30 @@ def _tool_label(tool_call: dict[str, Any]) -> str:
     return pretty
 
 
+def _pause_process(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is not None:
+        return
+    try:
+        if os.name != "nt" and proc.pid:
+            os.killpg(proc.pid, signal.SIGSTOP)
+    except (ProcessLookupError, OSError, AttributeError):
+        return
+
+
+def _resume_process(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is not None:
+        return
+    try:
+        if os.name != "nt" and proc.pid:
+            os.killpg(proc.pid, signal.SIGCONT)
+    except (ProcessLookupError, OSError, AttributeError):
+        return
+
+
 def _stop_process(proc: asyncio.subprocess.Process) -> None:
     if proc.returncode is not None:
         return
+    _resume_process(proc)
     try:
         if os.name != "nt" and proc.pid:
             os.killpg(proc.pid, signal.SIGTERM)

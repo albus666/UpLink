@@ -5,18 +5,54 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-_SENSITIVE_SHELL = re.compile(
-    r"nginx|systemctl|ufw|iptables|firewalld|firewall-cmd|sshd|/etc/nginx|/etc/systemd|"
-    r"/etc/ssh|/etc/sudoers|reboot|shutdown|useradd|userdel|passwd|chown\s+root",
+# 密钥 / 凭据文件：读或写都要确认。
+_SECRET_PATH = re.compile(
+    r"(^|/)\.env($|/|\.|_)|/\.ssh/[\w.-]+|(^|/)\S+\.pem($|\?|\s)|(^|/|\\)\S+\.key($|\?|\s)|"
+    r"id_rsa|id_ed25519|credentials|secrets?\.(json|ya?ml|toml)|/etc/shadow|/etc/gshadow",
     re.I,
 )
-_SENSITIVE_PATH = re.compile(
-    r"(^|/)\.env($|/|\.|_)|/\.ssh/|/etc/nginx|/etc/systemd|/etc/ssh|"
-    r"\.pem($|\?)|\.key($|\?)|id_rsa|id_ed25519|credentials|secrets?\.(json|ya?ml|toml)",
+# 系统路径：只有写入、删除、改权限才要确认。
+_PROTECTED_PATH = re.compile(
+    r"/etc/nginx|/etc/systemd|/etc/ssh|/etc/sudoers|"
+    r"(^|/)\.env($|/|\.|_)|/\.ssh/|\.pem($|\?)|\.key($|\?)|"
+    r"id_rsa|id_ed25519|credentials|secrets?\.(json|ya?ml|toml)",
     re.I,
 )
 _SECRET_TOKENS = re.compile(
     r"CURSOR_API_KEY|AWS_SECRET|api[_-]?key|secret[_-]?key|private[_-]?key|access[_-]?key",
+    re.I,
+)
+
+_MUTATING_SYSTEMCTL = re.compile(
+    r"\bsystemctl\s+(?:start|stop|restart|reload|try-reload-or-restart|enable|disable|"
+    r"mask|unmask|isolate|kill|edit|set-default|daemon-reload|reset-failed|"
+    r"add-wants|set-property|reboot|poweroff)\b",
+    re.I,
+)
+_MUTATING_SERVICE = re.compile(r"\bservice\s+\S+\s+(?:start|stop|restart|reload)\b", re.I)
+_MUTATING_NGINX = re.compile(r"\bnginx\s+(?:-\s*)?(?:-s\s+)?(?:reload|stop|quit)\b", re.I)
+_MUTATING_UFW = re.compile(r"\bufw\s+(?!status\b|show\b|version\b|app\s+list\b|--help\b)", re.I)
+_MUTATING_IPTABLES = re.compile(
+    r"\b(?:ip6tables|iptables)\b[^\n]*"
+    r"(?:\s-[ADIRFPXE](?:\s|$)|"
+    r"\s-N\s+\S|"
+    r"\s--(?:append|delete|insert|replace|flush|policy|new-chain|delete-chain|rename-chain)\b)",
+    re.I,
+)
+_MUTATING_FIREWALL = re.compile(
+    r"\bfirewall-cmd\b(?!.*--(?:list[\w-]*|state|query[\w-]*|get[\w-]*|help|info|version)\b)",
+    re.I,
+)
+_POWER = re.compile(r"\b(?:reboot|shutdown|halt|poweroff|init\s+[06])\b", re.I)
+_USERS = re.compile(r"\b(?:useradd|userdel|usermod|passwd|visudo|chage)\b", re.I)
+_CHOWN_ROOT = re.compile(r"\bchown\s+(?:-[^\s]+\s+)*root\b", re.I)
+_PROTECTED_WRITE = re.compile(
+    r"(?:>>?|tee(?:\s+-a)?)\s*['\"]?(?:/etc/|\S*\.env(?:$|\.|\s)|\S*\.pem(?:$|\s)|\S*/\.ssh/)",
+    re.I,
+)
+_PROTECTED_FILE_OP = re.compile(
+    r"\b(?:rm|mv|cp|install|chmod|chown|mkdir|touch|truncate|tee|unlink)\b"
+    r".*(?:/etc/|/etc/nginx|/etc/systemd|/etc/ssh|\.ssh/|\.env(?:$|\.|\s)|\.pem(?:$|\s))",
     re.I,
 )
 
@@ -54,6 +90,35 @@ def _tool_args(tool_call: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     return "tool", {}
 
 
+def _shell_needs_approval(command: str) -> bool:
+    text = command.strip()
+    if not text:
+        return False
+    if _SECRET_PATH.search(text) or _SECRET_TOKENS.search(text):
+        return True
+    if _MUTATING_SYSTEMCTL.search(text):
+        return True
+    if _MUTATING_SERVICE.search(text):
+        return True
+    if _MUTATING_NGINX.search(text):
+        return True
+    if _MUTATING_UFW.search(text):
+        return True
+    if _MUTATING_IPTABLES.search(text):
+        return True
+    if _MUTATING_FIREWALL.search(text):
+        return True
+    if _POWER.search(text):
+        return True
+    if _USERS.search(text):
+        return True
+    if _CHOWN_ROOT.search(text):
+        return True
+    if _PROTECTED_WRITE.search(text) or _PROTECTED_FILE_OP.search(text):
+        return True
+    return False
+
+
 def check_tool_call(tool_call: dict[str, Any]) -> ApprovalRequest:
     tool, args = _tool_args(tool_call)
     if isinstance(args, str):
@@ -68,15 +133,15 @@ def check_tool_call(tool_call: dict[str, Any]) -> ApprovalRequest:
     blob = " ".join(part for part in [command, path, patch] if part)
 
     sensitive = False
-    if tool == "shell" and _SENSITIVE_SHELL.search(command):
+    if tool == "shell" and command and _shell_needs_approval(command):
         sensitive = True
-    if path and _SENSITIVE_PATH.search(path):
-        sensitive = True
-    if blob and _SECRET_TOKENS.search(blob):
+    if tool == "read" and path and _SECRET_PATH.search(path):
         sensitive = True
     if tool in {"write", "edit", "patch", "delete"} and path and (
-        path.startswith("/etc/") or _SENSITIVE_PATH.search(path)
+        path.startswith("/etc/") or _PROTECTED_PATH.search(path)
     ):
+        sensitive = True
+    if blob and _SECRET_TOKENS.search(blob):
         sensitive = True
 
     if tool == "shell" and command:

@@ -271,9 +271,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _maybePromptApproval(RemoteTask task) async {
     if (task.status != 'awaiting_approval') return;
-    if (_approvalSeen.contains(task.id)) return;
-    _approvalSeen.add(task.id);
     final pending = task.pendingApproval;
+    final approvalId = (pending?['id'] ?? task.id).toString();
+    if (_approvalSeen.contains(approvalId)) return;
+    _approvalSeen.add(approvalId);
     final detail = (pending?['detail'] ?? pending?['summary'] ?? '敏感操作').toString();
     if (!mounted) return;
     final approved = await showDialog<bool>(
@@ -298,6 +299,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted) return;
       await _reload();
     } on ApiException catch (error) {
+      _approvalSeen.remove(approvalId);
       _toast(error.message);
     }
   }

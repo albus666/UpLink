@@ -153,6 +153,13 @@ class Store:
                 (utc_now(), task_id),
             )
 
+    def mark_awaiting_approval(self, task_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE tasks SET status = 'awaiting_approval', finished_at = NULL WHERE id = ?",
+                (task_id,),
+            )
+
     def mark_finished(
         self,
         task_id: str,
