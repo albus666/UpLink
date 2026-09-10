@@ -610,6 +610,7 @@ class _HomeScreenState extends State<HomeScreen> {
       },
       child: Scaffold(
       key: _scaffold,
+      resizeToAvoidBottomInset: false,
       onDrawerChanged: (open) => setState(() => _drawerOpen = open),
       drawer: HistoryDrawer(
         key: _drawerKey,
@@ -758,7 +759,7 @@ class _EmptyLink extends StatelessWidget {
 
 final _composerTapGroup = Object();
 
-class _ComposerBar extends StatelessWidget {
+class _ComposerBar extends StatefulWidget {
   const _ComposerBar({
     required this.prompt,
     required this.uploads,
@@ -790,11 +791,41 @@ class _ComposerBar extends StatelessWidget {
   final Future<void> Function({String? effort, required bool fast}) onVariant;
 
   @override
+  State<_ComposerBar> createState() => _ComposerBarState();
+}
+
+class _ComposerBarState extends State<_ComposerBar> {
+  final FocusNode _promptFocus = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    _promptFocus.addListener(_onPromptFocus);
+  }
+
+  @override
+  void dispose() {
+    _promptFocus.removeListener(_onPromptFocus);
+    _promptFocus.dispose();
+    super.dispose();
+  }
+
+  void _onPromptFocus() => setState(() {});
+
+  @override
   Widget build(BuildContext context) {
-    final ask = mode == 'ask';
+    final ask = widget.mode == 'ask';
     final modeColor = ask ? PilotColors.good : PilotColors.accent;
-    final variant = workspace == null ? null : parseModelVariant(workspace!.model, workspace!.models);
-    return Material(
+    final variant = widget.workspace == null
+        ? null
+        : parseModelVariant(widget.workspace!.model, widget.workspace!.models);
+    final keyboardLift =
+        _promptFocus.hasFocus ? MediaQuery.viewInsetsOf(context).bottom : 0.0;
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 120),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.only(bottom: keyboardLift),
+      child: Material(
       color: PilotColors.bg,
       child: SafeArea(
         top: false,
@@ -812,18 +843,18 @@ class _ComposerBar extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (uploads.isNotEmpty)
+                if (widget.uploads.isNotEmpty)
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Wrap(
                       spacing: 6,
                       runSpacing: 6,
                       children: [
-                        for (final file in uploads)
+                        for (final file in widget.uploads)
                           Chip(
                             visualDensity: VisualDensity.compact,
                             label: Text(file.originalName, style: const TextStyle(fontSize: 12)),
-                            onDeleted: () => onRemoveUpload(file),
+                            onDeleted: () => widget.onRemoveUpload(file),
                           ),
                       ],
                     ),
@@ -831,7 +862,8 @@ class _ComposerBar extends StatelessWidget {
                 TapRegion(
                   groupId: _composerTapGroup,
                   child: TextField(
-                    controller: prompt,
+                    focusNode: _promptFocus,
+                    controller: widget.prompt,
                     minLines: 1,
                     maxLines: 5,
                     decoration: InputDecoration(
@@ -852,7 +884,7 @@ class _ComposerBar extends StatelessWidget {
                         label: ask ? 'Ask' : 'Agent',
                         color: modeColor,
                         fill: ask ? PilotColors.goodDim : PilotColors.accentDim,
-                        onTap: () => _pickMode(context, mode, onMode),
+                        onTap: () => _pickMode(context, widget.mode, widget.onMode),
                       ),
                     ),
                     if (variant != null && (variant.canFast || variant.efforts.isNotEmpty)) ...[
@@ -869,29 +901,29 @@ class _ComposerBar extends StatelessWidget {
                     const Spacer(),
                     IconButton(
                       tooltip: '附件',
-                      onPressed: busy ? null : onAttach,
+                      onPressed: widget.busy ? null : widget.onAttach,
                       visualDensity: VisualDensity.compact,
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints.tightFor(width: 36, height: 36),
                       icon: const Icon(Icons.attach_file, size: 20),
                       color: PilotColors.muted,
                     ),
-                    running
+                    widget.running
                         ? IconButton.filled(
-                            onPressed: stopping ? null : onStop,
+                            onPressed: widget.stopping ? null : widget.onStop,
                             style: IconButton.styleFrom(
                               backgroundColor: PilotColors.card,
                               foregroundColor: PilotColors.text,
                               minimumSize: const Size(36, 36),
                             ),
-                            icon: stopping
+                            icon: widget.stopping
                                 ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                                 : const Icon(Icons.stop, size: 18),
                           )
                         : IconButton.filled(
-                            onPressed: busy ? null : onSend,
+                            onPressed: widget.busy ? null : widget.onSend,
                             style: IconButton.styleFrom(minimumSize: const Size(36, 36)),
-                            icon: busy
+                            icon: widget.busy
                                 ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                                 : const Icon(Icons.arrow_upward, size: 18),
                           ),
@@ -902,6 +934,7 @@ class _ComposerBar extends StatelessWidget {
           ),
           ),
         ),
+      ),
       ),
     );
   }
@@ -949,7 +982,7 @@ class _ComposerBar extends StatelessWidget {
                 selected: variant.fast,
                 onTap: () {
                   dismiss();
-                  onVariant(effort: variant.effort, fast: !variant.fast);
+                  widget.onVariant(effort: variant.effort, fast: !variant.fast);
                 },
               ),
             if (variant.canFast && variant.efforts.isNotEmpty)
@@ -960,7 +993,7 @@ class _ComposerBar extends StatelessWidget {
                 selected: variant.effort == effort,
                 onTap: () {
                   dismiss();
-                  onVariant(effort: effort, fast: variant.fast);
+                  widget.onVariant(effort: effort, fast: variant.fast);
                 },
               ),
           ],
