@@ -8,9 +8,10 @@ import '../theme.dart';
 import 'markdown_text.dart';
 
 class ChatTurn extends StatelessWidget {
-  const ChatTurn({super.key, required this.task});
+  const ChatTurn({super.key, required this.task, this.onRetry});
 
   final RemoteTask task;
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -52,6 +53,7 @@ class ChatTurn extends StatelessWidget {
               label: '${task.mode == 'ask' ? 'Ask · ' : ''}${_statusLabel(task.status)} · $time',
               copyText: prompt.isEmpty ? null : prompt,
               copyLabel: '消息',
+              onRetry: onRetry,
             ),
           ),
           if (process.isNotEmpty || task.isActive) ...[
@@ -83,6 +85,7 @@ class ChatTurn extends StatelessWidget {
       'succeeded' => '已完成',
       'failed' => '失败',
       'cancelled' => '已取消',
+      'awaiting_approval' => '待确认',
       _ => status,
     };
   }
@@ -105,11 +108,13 @@ class _MessageMeta extends StatelessWidget {
     this.label = '',
     this.copyText,
     this.copyLabel = '内容',
+    this.onRetry,
   });
 
   final String label;
   final String? copyText;
   final String copyLabel;
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -123,11 +128,21 @@ class _MessageMeta extends StatelessWidget {
         if (canCopy)
           GestureDetector(
             onTap: () => ChatTurn._copyText(context, copyText!, copyLabel),
-            child: Text(
-              '复制',
-              style: metaStyle.copyWith(color: PilotColors.info, fontWeight: FontWeight.w600),
+            child: const Padding(
+              padding: EdgeInsets.only(left: 1),
+              child: Icon(Icons.copy, size: 13, color: PilotColors.info),
             ),
           ),
+        if (onRetry != null) ...[
+          if (canCopy) Text(' · ', style: metaStyle),
+          GestureDetector(
+            onTap: onRetry,
+            child: const Padding(
+              padding: EdgeInsets.only(left: 1),
+              child: Icon(Icons.refresh, size: 14, color: PilotColors.info),
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -264,6 +279,9 @@ class ActionLook {
 
 ActionLook actionLook(LogLine line) {
   final text = stripAnsi(line.text);
+  if (line.kind == 'approval') {
+    return const ActionLook(Icons.verified_user_outlined, PilotColors.accent);
+  }
   if (line.kind == 'error' || line.kind == 'stderr') {
     return const ActionLook(Icons.error_outline, PilotColors.bad);
   }

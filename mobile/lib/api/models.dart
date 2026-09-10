@@ -124,6 +124,7 @@ class RemoteTask {
     this.pinned = false,
     this.logs = const [],
     this.logCount = 0,
+    this.pendingApproval,
   });
 
   final String id;
@@ -141,8 +142,10 @@ class RemoteTask {
   final bool pinned;
   final List<LogLine> logs;
   final int logCount;
+  final Map<String, dynamic>? pendingApproval;
 
-  bool get isActive => status == 'queued' || status == 'running';
+  bool get isActive =>
+      status == 'queued' || status == 'running' || status == 'awaiting_approval';
 
   factory RemoteTask.fromJson(Map<String, dynamic> json) {
     final logs = (json['logs'] as List<dynamic>? ?? const [])
@@ -165,6 +168,7 @@ class RemoteTask {
       pinned: json['pinned'] == true || json['pinned'] == 1,
       logs: logs,
       logCount: json['log_count'] as int? ?? logs.length,
+      pendingApproval: json['pending_approval'] as Map<String, dynamic>?,
     );
   }
 
@@ -184,6 +188,7 @@ class RemoteTask {
         'pinned': pinned,
         'logs': logs.map((line) => line.toJson()).toList(),
         'log_count': logCount,
+        'pending_approval': pendingApproval,
       };
 }
 

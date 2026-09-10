@@ -51,6 +51,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _hydrating = false;
   int _ticks = 0;
   final _details = <String, RemoteTask>{};
+  final _approvalSeen = <String>{};
 
   bool get _anyActive =>
       _current?.isActive == true || _threads.any((thread) => thread.isActive);
@@ -260,11 +261,57 @@ class _HomeScreenState extends State<HomeScreen> {
       });
       _stickBottom();
       unawaited(_persistCache());
+      unawaited(_maybePromptApproval(detailed));
     } on ApiException {
       // keep last frame
     } finally {
       _hydrating = false;
     }
+  }
+
+  Future<void> _maybePromptApproval(RemoteTask task) async {
+    if (task.status != 'awaiting_approval') return;
+    if (_approvalSeen.contains(task.id)) return;
+    _approvalSeen.add(task.id);
+    final pending = task.pendingApproval;
+    final detail = (pending?['detail'] ?? pending?['summary'] ?? '敏感操作').toString();
+    if (!mounted) return;
+    final approved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: PilotColors.card,
+        title: const Text('确认敏感操作', style: TextStyle(fontSize: 16)),
+        content: SingleChildScrollView(
+          child: Text(detail, style: const TextStyle(fontSize: 13, height: 1.45)),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('拒绝')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('允许')),
+        ],
+      ),
+    );
+    if (!mounted || approved == null) return;
+    final session = context.read<SessionController>();
+    try {
+      await session.client.approveTask(task.id, approve: approved);
+      if (!mounted) return;
+      await _reload();
+    } on ApiException catch (error) {
+      _toast(error.message);
+    }
+  }
+
+  Future<void> _retryTurn(RemoteTask turn) async {
+    if (_busy || _stopping || _anyActive) {
+      _toast('有任务在进行中');
+      return;
+    }
+    final text = displayPrompt(turn.prompt);
+    if (text.isEmpty) return;
+    await context.read<SessionController>().setChatMode(turn.mode);
+    _prompt.text = text;
+    await _send();
   }
 
   Future<void> _ping() async {
@@ -706,7 +753,12 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                   if (_current != null)
-                    for (final turn in _current!.turns) ChatTurn(key: ValueKey(turn.id), task: turn),
+                    for (final turn in _current!.turns)
+                      ChatTurn(
+                        key: ValueKey(turn.id),
+                        task: turn,
+                        onRetry: () => _retryTurn(turn),
+                      ),
                 ],
               ),
             ),

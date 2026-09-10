@@ -143,6 +143,15 @@ class ApiClient {
     _decode(response);
   }
 
+  Future<RemoteTask> approveTask(String id, {required bool approve}) async {
+    final response = await _post(
+      '/api/tasks/$id/approval',
+      body: jsonEncode({'decision': approve ? 'approve' : 'deny'}),
+      timeout: const Duration(seconds: 15),
+    );
+    return RemoteTask.fromJson(_decode(response) as Map<String, dynamic>);
+  }
+
   Future<void> patchThread(String id, {String? title, bool? pinned}) async {
     final response = await _patch(
       '/api/threads/$id',

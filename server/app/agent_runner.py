@@ -18,9 +18,9 @@ PROMPT_PREFIX = """你在一台服务器的本地工作区里执行任务。手�
 工作区绝对路径：{workspace}
 
 硬性规则：
-- 只修改工作区以内的文件，不要碰系统目录
-- 需要时可使用 sudo；仍不要擅自改 nginx / systemd / 防火墙 / SSH 配置，除非用户明确要求
-- 不要读取或输出密钥、token、.env、私钥
+- 可修改工作区文件，也可在需要时使用 sudo、改 nginx / systemd / 防火墙 / SSH、读写 .env 与密钥
+- 涉及 nginx、systemd、防火墙、SSH、/etc/、.env、.ssh、私钥、token 等敏感操作时，系统会在手机 App 弹窗让用户确认后再继续
+- 常规读写与命令无需额外确认，直接执行
 - 除非用户明确要求，否则不要 git push
 - 回复用中文，简洁说明你改了什么
 
@@ -79,6 +79,11 @@ class AgentRunner:
         if task["status"] == "queued":
             self.store.mark_finished(task_id, "cancelled", error="已取消")
             self.store.append_log(task_id, "system", "任务在排队时被取消")
+            return True
+        if task["status"] == "awaiting_approval":
+            self.store.clear_pending_approval(task_id)
+            self.store.mark_finished(task_id, "cancelled", error="已取消")
+            self.store.append_log(task_id, "system", "等待确认时已取消")
             return True
         if self._current_task_id != task_id:
             return False
@@ -232,6 +237,27 @@ class AgentRunner:
                 if event is None:
                     self.store.append_log(task_id, "raw", line)
                     continue
+                if (
+                    mode == "agent"
+                    and event.get("type") == "tool_call"
+                    and event.get("subtype") == "started"
+                ):
+                    from .approval import check_tool_call
+
+                    verdict = check_tool_call(event.get("tool_call") or {})
+                    if verdict.sensitive:
+                        self.store.set_pending_approval(task_id, verdict.to_dict())
+                        self.store.append_log(task_id, "approval", verdict.summary)
+                        self.store.append_log(task_id, "system", "等待手机 App 确认敏感操作")
+                        _stop_process(proc)
+                        await _ensure_dead(proc)
+                        await _wait_silent_task(stderr_task)
+                        self.store.mark_finished(
+                            task_id,
+                            "awaiting_approval",
+                            session_id=session_id,
+                        )
+                        return
                 kind, text, extra = _format_event(event)
                 if extra.get("session_id") and not session_id:
                     session_id = str(extra["session_id"])

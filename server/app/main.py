@@ -96,6 +96,10 @@ class ThreadBody(BaseModel):
     pinned: bool | None = None
 
 
+class ApprovalBody(BaseModel):
+    decision: str = Field(min_length=1, max_length=16)
+
+
 class FileWriteBody(BaseModel):
     path: str = Field(min_length=1, max_length=1000)
     content: str = Field(max_length=1_000_000)
@@ -193,6 +197,44 @@ def get_task(task_id: str, state: State, _: Auth) -> dict[str, Any]:
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在")
     return task
+
+
+@app.post("/api/tasks/{task_id}/approval")
+async def task_approval(task_id: str, body: ApprovalBody, state: State, _: Auth) -> dict[str, Any]:
+    task = state.store.get_task(task_id, include_logs=False)
+    if task is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task["status"] != "awaiting_approval":
+        raise HTTPException(status_code=409, detail="当前没有待确认的操作")
+
+    pending = task.get("pending_approval") or {}
+    summary = str(pending.get("summary") or pending.get("detail") or "敏感操作").strip()
+    decision = body.decision.strip().lower()
+
+    if decision == "deny":
+        state.store.clear_pending_approval(task_id)
+        state.store.mark_finished(task_id, "cancelled", error="用户拒绝敏感操作")
+        state.store.append_log(task_id, "system", "用户已拒绝敏感操作")
+        updated = state.store.get_task(task_id)
+        assert updated is not None
+        return updated
+
+    if decision != "approve":
+        raise HTTPException(status_code=400, detail="decision 只能是 approve 或 deny")
+
+    session_id = task.get("session_id")
+    mode = task.get("mode") or "agent"
+    state.store.clear_pending_approval(task_id)
+    state.store.mark_finished(task_id, "succeeded", result_text=f"已批准：{summary}")
+    state.store.append_log(task_id, "system", "用户已批准，继续执行")
+
+    follow = state.store.create_task(
+        f"【用户已在 App 批准】请继续执行以下操作：\n{summary}",
+        resume_of=session_id,
+        mode=mode,
+    )
+    await state.runner.enqueue(follow["id"])
+    return follow
 
 
 @app.post("/api/tasks/{task_id}/cancel")

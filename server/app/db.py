@@ -58,6 +58,8 @@ class Store:
                 conn.execute("ALTER TABLE tasks ADD COLUMN title TEXT")
             if "pinned" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+            if "pending_approval_json" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN pending_approval_json TEXT")
 
     def create_task(self, prompt: str, resume_of: str | None = None, mode: str = "agent") -> dict[str, Any]:
         mode = "ask" if mode == "ask" else "agent"
@@ -115,9 +117,27 @@ class Store:
     def has_active_task(self) -> bool:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT 1 FROM tasks WHERE status IN ('queued', 'running') LIMIT 1"
+                """
+                SELECT 1 FROM tasks
+                WHERE status IN ('queued', 'running', 'awaiting_approval')
+                LIMIT 1
+                """
             ).fetchone()
         return row is not None
+
+    def set_pending_approval(self, task_id: str, payload: dict[str, Any]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE tasks SET pending_approval_json = ? WHERE id = ?",
+                (json.dumps(payload, ensure_ascii=False), task_id),
+            )
+
+    def clear_pending_approval(self, task_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE tasks SET pending_approval_json = NULL WHERE id = ?",
+                (task_id,),
+            )
 
     def next_queued(self) -> dict[str, Any] | None:
         with self._connect() as conn:
@@ -231,6 +251,8 @@ class Store:
     def _task_from_row(self, row: sqlite3.Row, include_logs: bool = True) -> dict[str, Any]:
         data = dict(row)
         logs = json.loads(data.pop("logs_json") or "[]")
+        pending_raw = data.pop("pending_approval_json", None)
+        data["pending_approval"] = json.loads(pending_raw) if pending_raw else None
         data["mode"] = data.get("mode") or "agent"
         title = data.get("title")
         data["title"] = title.strip() if isinstance(title, str) and title.strip() else None
