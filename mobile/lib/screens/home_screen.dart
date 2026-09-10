@@ -796,6 +796,8 @@ class _ComposerBar extends StatefulWidget {
 
 class _ComposerBarState extends State<_ComposerBar> {
   final FocusNode _promptFocus = FocusNode();
+  final LayerLink _modeLink = LayerLink();
+  final LayerLink _variantLink = LayerLink();
 
   @override
   void initState() {
@@ -881,6 +883,7 @@ class _ComposerBarState extends State<_ComposerBar> {
                   children: [
                     Builder(
                       builder: (context) => _ToolbarButton(
+                        link: _modeLink,
                         label: ask ? 'Ask' : 'Agent',
                         color: modeColor,
                         fill: ask ? PilotColors.goodDim : PilotColors.accentDim,
@@ -891,6 +894,7 @@ class _ComposerBarState extends State<_ComposerBar> {
                       const SizedBox(width: 6),
                       Builder(
                         builder: (context) => _ToolbarButton(
+                          link: _variantLink,
                           label: variant.label,
                           color: PilotColors.muted,
                           fill: PilotColors.card,
@@ -942,6 +946,7 @@ class _ComposerBarState extends State<_ComposerBar> {
   Future<void> _pickMode(BuildContext context, String mode, ValueChanged<String> onMode) async {
     final picked = await showFollowPopup<String>(
       context: context,
+      anchorLink: _modeLink,
       width: 148,
       builder: (dismiss) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
@@ -970,6 +975,7 @@ class _ComposerBarState extends State<_ComposerBar> {
   Future<void> _pickVariant(BuildContext context, ModelVariant variant) async {
     await showFollowPopup<void>(
       context: context,
+      anchorLink: _variantLink,
       width: 188,
       builder: (dismiss) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
@@ -1009,12 +1015,14 @@ class _ToolbarButton extends StatelessWidget {
     required this.color,
     this.fill,
     this.onTap,
+    this.link,
   });
 
   final String label;
   final Color color;
   final Color? fill;
   final VoidCallback? onTap;
+  final LayerLink? link;
 
   @override
   Widget build(BuildContext context) {
@@ -1033,8 +1041,11 @@ class _ToolbarButton extends StatelessWidget {
         ],
       ),
     );
-    if (onTap == null) return child;
-    return InkWell(onTap: onTap, borderRadius: BorderRadius.circular(16), child: child);
+    final button = onTap == null
+        ? child
+        : InkWell(onTap: onTap, borderRadius: BorderRadius.circular(16), child: child);
+    if (link == null) return button;
+    return CompositedTransformTarget(link: link!, child: button);
   }
 }
 
