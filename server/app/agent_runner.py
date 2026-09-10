@@ -132,8 +132,9 @@ class AgentRunner:
             "--output-format",
             "stream-json",
         ]
-        cmd.extend(["--mode", mode])
-        if mode == "agent":
+        if mode == "ask":
+            cmd.extend(["--mode", "ask"])
+        else:
             cmd.append("--force")
         if self.settings.agent_model:
             cmd.extend(["--model", self.settings.agent_model])
