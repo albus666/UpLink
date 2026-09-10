@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../api/models.dart';
@@ -15,6 +16,7 @@ class ChatTurn extends StatelessWidget {
   Widget build(BuildContext context) {
     final process = processLogs(task);
     final reply = assistantReply(task);
+    final prompt = displayPrompt(task.prompt);
     final time = _shortTime(task.createdAt);
     return Padding(
       padding: const EdgeInsets.only(bottom: 22),
@@ -25,27 +27,31 @@ class ChatTurn extends StatelessWidget {
             alignment: Alignment.centerRight,
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 320),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: PilotColors.userBubble,
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(16),
-                    topRight: Radius.circular(16),
-                    bottomLeft: Radius.circular(16),
-                    bottomRight: Radius.circular(4),
+              child: GestureDetector(
+                onLongPress: prompt.isEmpty ? null : () => _copyText(context, prompt, '消息'),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: PilotColors.userBubble,
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(16),
+                      topRight: Radius.circular(16),
+                      bottomLeft: Radius.circular(16),
+                      bottomRight: Radius.circular(4),
+                    ),
                   ),
+                  child: SelectableText(prompt, style: const TextStyle(height: 1.45)),
                 ),
-                child: Text(displayPrompt(task.prompt), style: const TextStyle(height: 1.45)),
               ),
             ),
           ),
           const SizedBox(height: 6),
           Align(
             alignment: Alignment.centerRight,
-            child: Text(
-              '${task.mode == 'ask' ? 'Ask · ' : ''}${_statusLabel(task.status)} · $time',
-              style: const TextStyle(color: PilotColors.muted, fontSize: 11),
+            child: _MessageMeta(
+              label: '${task.mode == 'ask' ? 'Ask · ' : ''}${_statusLabel(task.status)} · $time',
+              copyText: prompt.isEmpty ? null : prompt,
+              copyLabel: '消息',
             ),
           ),
           if (process.isNotEmpty || task.isActive) ...[
@@ -55,6 +61,11 @@ class ChatTurn extends StatelessWidget {
           if (reply.isNotEmpty) ...[
             const SizedBox(height: 12),
             MarkdownText(reply),
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: _MessageMeta(copyText: reply, copyLabel: '回复'),
+            ),
           ],
           if (task.error != null && task.error!.trim().isNotEmpty && reply.isEmpty) ...[
             const SizedBox(height: 10),
@@ -80,6 +91,45 @@ class ChatTurn extends StatelessWidget {
     final parsed = DateTime.tryParse(raw)?.toLocal();
     if (parsed == null) return '';
     return DateFormat('M/d HH:mm').format(parsed);
+  }
+
+  static Future<void> _copyText(BuildContext context, String text, String label) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('已复制$label')));
+  }
+}
+
+class _MessageMeta extends StatelessWidget {
+  const _MessageMeta({
+    this.label = '',
+    this.copyText,
+    this.copyLabel = '内容',
+  });
+
+  final String label;
+  final String? copyText;
+  final String copyLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final metaStyle = const TextStyle(color: PilotColors.muted, fontSize: 11);
+    final canCopy = copyText != null && copyText!.trim().isNotEmpty;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (label.isNotEmpty) Text(label, style: metaStyle),
+        if (label.isNotEmpty && canCopy) Text(' · ', style: metaStyle),
+        if (canCopy)
+          GestureDetector(
+            onTap: () => ChatTurn._copyText(context, copyText!, copyLabel),
+            child: Text(
+              '复制',
+              style: metaStyle.copyWith(color: PilotColors.info, fontWeight: FontWeight.w600),
+            ),
+          ),
+      ],
+    );
   }
 }
 

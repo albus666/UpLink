@@ -238,7 +238,7 @@ class MarkdownText extends StatelessWidget {
     final base = style ?? const TextStyle(height: 1.6, fontSize: 15, color: PilotColors.text);
     final spans = parseMarkdownSpans(data);
     if (spans.isEmpty) {
-      return Text(data, style: base);
+      return SelectableText(data, style: base);
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -297,7 +297,7 @@ class MarkdownText extends StatelessWidget {
                       style: base.copyWith(color: PilotColors.muted, height: 1.5),
                     ),
                   ),
-                  Expanded(child: Text.rich(_inlineSpan(items[i], base))),
+                  Expanded(child: SelectableText.rich(_inlineSpan(items[i], base))),
                 ],
               ),
             ),
@@ -381,7 +381,7 @@ class MarkdownText extends StatelessWidget {
   Widget _cellText(String raw, TextStyle style) {
     final text = raw.trim();
     if (text.isEmpty) return const SizedBox.shrink();
-    return Text.rich(_inlineSpan(text, style));
+    return SelectableText.rich(_inlineSpan(text, style));
   }
 }
 
