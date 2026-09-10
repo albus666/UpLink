@@ -42,6 +42,36 @@ List<MdSpan> _parseFlow(String text) {
   }
 
   while (i < lines.length) {
+    final line = lines[i];
+    final header = RegExp(r'^(#{1,6})\s+(.+)$').firstMatch(line.trim());
+    if (header != null) {
+      flushText();
+      out.add(MdSpan('h${header.group(1)!.length}', header.group(2)!));
+      i++;
+      continue;
+    }
+    if (RegExp(r'^\s*[-*+]\s+').hasMatch(line)) {
+      flushText();
+      final items = <String>[];
+      while (i < lines.length && RegExp(r'^\s*[-*+]\s+').hasMatch(lines[i])) {
+        final match = RegExp(r'^\s*[-*+]\s+(.*)$').firstMatch(lines[i]);
+        items.add(match?.group(1) ?? '');
+        i++;
+      }
+      out.add(MdSpan('ul', jsonEncode(items)));
+      continue;
+    }
+    if (RegExp(r'^\s*\d+\.\s+').hasMatch(line)) {
+      flushText();
+      final items = <String>[];
+      while (i < lines.length && RegExp(r'^\s*\d+\.\s+').hasMatch(lines[i])) {
+        final match = RegExp(r'^\s*\d+\.\s+(.*)$').firstMatch(lines[i]);
+        items.add(match?.group(1) ?? '');
+        i++;
+      }
+      out.add(MdSpan('ol', jsonEncode(items)));
+      continue;
+    }
     if (_isTableLine(lines[i])) {
       final start = i;
       i++;
@@ -218,9 +248,61 @@ class MarkdownText extends StatelessWidget {
             _codeBlock(block.first.text, base)
           else if (block.length == 1 && block.first.kind == 'table')
             _tableBlock(block.first.text, base)
+          else if (block.length == 1 && block.first.kind.startsWith('h'))
+            _headingBlock(block.first, base)
+          else if (block.length == 1 && block.first.kind == 'ul')
+            _listBlock(block.first.text, base, ordered: false)
+          else if (block.length == 1 && block.first.kind == 'ol')
+            _listBlock(block.first.text, base, ordered: true)
           else
             SelectableText.rich(_spansToText(block, base)),
       ],
+    );
+  }
+
+  Widget _headingBlock(MdSpan span, TextStyle base) {
+    final level = int.tryParse(span.kind.substring(1)) ?? 3;
+    final sizes = {1: 22.0, 2: 19.0, 3: 17.0, 4: 16.0, 5: 15.0, 6: 14.0};
+    return Padding(
+      padding: EdgeInsets.only(top: level <= 2 ? 10 : 6, bottom: 4),
+      child: SelectableText.rich(
+        _inlineSpan(span.text, base.copyWith(
+          fontSize: sizes[level] ?? 15,
+          fontWeight: FontWeight.w700,
+          height: 1.35,
+        )),
+      ),
+    );
+  }
+
+  Widget _listBlock(String encoded, TextStyle base, {required bool ordered}) {
+    final raw = jsonDecode(encoded);
+    if (raw is! List || raw.isEmpty) return const SizedBox.shrink();
+    final items = raw.map((item) => item.toString()).toList();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (var i = 0; i < items.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 22,
+                    child: Text(
+                      ordered ? '${i + 1}.' : '•',
+                      style: base.copyWith(color: PilotColors.muted, height: 1.5),
+                    ),
+                  ),
+                  Expanded(child: Text.rich(_inlineSpan(items[i], base))),
+                ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -307,7 +389,11 @@ List<List<MdSpan>> _groupBlocks(List<MdSpan> spans) {
   final blocks = <List<MdSpan>>[];
   var current = <MdSpan>[];
   for (final span in spans) {
-    if (span.kind == 'fence' || span.kind == 'table') {
+    if (span.kind == 'fence' ||
+        span.kind == 'table' ||
+        span.kind.startsWith('h') ||
+        span.kind == 'ul' ||
+        span.kind == 'ol') {
       if (current.isNotEmpty) {
         blocks.add(current);
         current = [];

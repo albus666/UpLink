@@ -59,6 +59,32 @@ void main() {
     expect(find.text('**黄**'), findsNothing);
   });
 
+  test('parses headings and bullet lists', () {
+    final spans = parseMarkdownSpans('## 标题\n\n- 第一项\n- 第二项');
+    expect(spans.any((s) => s.kind == 'h2' && s.text == '标题'), isTrue);
+    final list = spans.singleWhere((s) => s.kind == 'ul');
+    expect(list.text.contains('第一项'), isTrue);
+    expect(list.text.contains('第二项'), isTrue);
+  });
+
+  testWidgets('renders headings and lists', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ListView(
+            children: [
+              MarkdownText('## 学习路径\n\n- Agent 基础\n- 工具调用'),
+            ],
+          ),
+        ),
+      ),
+    );
+    expect(find.text('学习路径'), findsOneWidget);
+    expect(find.text('Agent 基础'), findsOneWidget);
+    expect(find.text('## 学习路径'), findsNothing);
+    expect(find.text('- Agent 基础'), findsNothing);
+  });
+
   test('parses fenced code separately', () {
     final spans = parseMarkdownSpans('见\n```\nprint(1)\n```\n结束');
     expect(spans.where((s) => s.kind == 'fence').single.text, 'print(1)');

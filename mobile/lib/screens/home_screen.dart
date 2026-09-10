@@ -538,7 +538,7 @@ class _HomeScreenState extends State<HomeScreen> {
       context: anchor,
       width: 248,
       maxHeight: 380,
-      builder: (popup) => _ModelMenu(workspace: workspace),
+      builder: (dismiss) => _ModelMenu(workspace: workspace, onPick: dismiss),
     );
     if (selected == null || !mounted || selected == workspace.model) return;
     try {
@@ -554,16 +554,16 @@ class _HomeScreenState extends State<HomeScreen> {
     final value = await showFollowPopup<String>(
       context: anchor,
       width: 132,
-      builder: (popup) => Padding(
+      builder: (dismiss) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            FollowMenuTile(label: '连接', onTap: () => Navigator.pop(popup, 'link')),
-            FollowMenuTile(label: '文件', onTap: () => Navigator.pop(popup, 'files')),
-            FollowMenuTile(label: 'Git', onTap: () => Navigator.pop(popup, 'git')),
-            FollowMenuTile(label: 'AWS', onTap: () => Navigator.pop(popup, 'aws')),
-            FollowMenuTile(label: '设置', onTap: () => Navigator.pop(popup, 'settings')),
+            FollowMenuTile(label: '连接', onTap: () => dismiss('link')),
+            FollowMenuTile(label: '文件', onTap: () => dismiss('files')),
+            FollowMenuTile(label: 'Git', onTap: () => dismiss('git')),
+            FollowMenuTile(label: 'AWS', onTap: () => dismiss('aws')),
+            FollowMenuTile(label: '设置', onTap: () => dismiss('settings')),
           ],
         ),
       ),
@@ -756,6 +756,8 @@ class _EmptyLink extends StatelessWidget {
   }
 }
 
+final _composerTapGroup = Object();
+
 class _ComposerBar extends StatelessWidget {
   const _ComposerBar({
     required this.prompt,
@@ -798,7 +800,9 @@ class _ComposerBar extends StatelessWidget {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
-          child: Container(
+          child: TapRegion(
+            groupId: _composerTapGroup,
+            child: Container(
             padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
             decoration: BoxDecoration(
               color: PilotColors.surface,
@@ -824,18 +828,21 @@ class _ComposerBar extends StatelessWidget {
                       ],
                     ),
                   ),
-                TextField(
-                  controller: prompt,
-                  minLines: 1,
-                  maxLines: 5,
-                  decoration: InputDecoration(
-                    hintText: '发消息',
-                    border: InputBorder.none,
-                    enabledBorder: InputBorder.none,
-                    focusedBorder: InputBorder.none,
-                    filled: false,
-                    isDense: true,
-                    contentPadding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+                TapRegion(
+                  groupId: _composerTapGroup,
+                  child: TextField(
+                    controller: prompt,
+                    minLines: 1,
+                    maxLines: 5,
+                    decoration: InputDecoration(
+                      hintText: '发消息',
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      filled: false,
+                      isDense: true,
+                      contentPadding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+                    ),
                   ),
                 ),
                 Row(
@@ -893,6 +900,7 @@ class _ComposerBar extends StatelessWidget {
               ],
             ),
           ),
+          ),
         ),
       ),
     );
@@ -902,7 +910,7 @@ class _ComposerBar extends StatelessWidget {
     final picked = await showFollowPopup<String>(
       context: context,
       width: 148,
-      builder: (popup) => Padding(
+      builder: (dismiss) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -911,13 +919,13 @@ class _ComposerBar extends StatelessWidget {
               label: 'Agent',
               color: PilotColors.accent,
               selected: mode == 'agent',
-              onTap: () => Navigator.pop(popup, 'agent'),
+              onTap: () => dismiss('agent'),
             ),
             FollowMenuTile(
               label: 'Ask',
               color: PilotColors.good,
               selected: mode == 'ask',
-              onTap: () => Navigator.pop(popup, 'ask'),
+              onTap: () => dismiss('ask'),
             ),
           ],
         ),
@@ -930,7 +938,7 @@ class _ComposerBar extends StatelessWidget {
     await showFollowPopup<void>(
       context: context,
       width: 188,
-      builder: (popup) => Padding(
+      builder: (dismiss) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -940,7 +948,7 @@ class _ComposerBar extends StatelessWidget {
                 label: 'Fast',
                 selected: variant.fast,
                 onTap: () {
-                  Navigator.pop(popup);
+                  dismiss();
                   onVariant(effort: variant.effort, fast: !variant.fast);
                 },
               ),
@@ -951,7 +959,7 @@ class _ComposerBar extends StatelessWidget {
                 label: effortLabels[effort] ?? effort,
                 selected: variant.effort == effort,
                 onTap: () {
-                  Navigator.pop(popup);
+                  dismiss();
                   onVariant(effort: effort, fast: variant.fast);
                 },
               ),
@@ -1067,9 +1075,10 @@ class _MachineLine extends StatelessWidget {
 }
 
 class _ModelMenu extends StatefulWidget {
-  const _ModelMenu({required this.workspace});
+  const _ModelMenu({required this.workspace, required this.onPick});
 
   final WorkspaceInfo workspace;
+  final ValueChanged<String> onPick;
 
   @override
   State<_ModelMenu> createState() => _ModelMenuState();
@@ -1110,7 +1119,7 @@ class _ModelMenuState extends State<_ModelMenu> {
             label: item.label,
             selected: item.id == widget.workspace.model,
             color: PilotColors.info,
-            onTap: () => Navigator.pop(context, item.id),
+            onTap: () => widget.onPick(item.id),
           ),
       ],
     );

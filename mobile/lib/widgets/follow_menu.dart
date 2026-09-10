@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -6,26 +7,30 @@ import '../theme.dart';
 
 enum FollowAlign { start, end }
 
+typedef FollowPopupBuilder<T> = Widget Function(void Function([T? result]) dismiss);
+
+/// Anchor popup to a widget without stealing focus (keeps keyboard open).
 Future<T?> showFollowPopup<T>({
   required BuildContext context,
-  required WidgetBuilder builder,
+  required FollowPopupBuilder<T> builder,
   double width = 176,
   double maxHeight = 360,
   FollowAlign align = FollowAlign.start,
   double gap = 8,
 }) {
   final box = context.findRenderObject() as RenderBox?;
-  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
-  if (box == null || overlay == null || !box.hasSize) {
+  final overlayState = Overlay.of(context);
+  if (box == null || !box.hasSize) {
     return Future<T?>.value(null);
   }
 
-  final origin = box.localToGlobal(Offset.zero, ancestor: overlay);
-  final screen = overlay.size;
   final media = MediaQuery.of(context);
-  final usableBottom = screen.height - media.viewInsets.bottom;
+  final keyboardInset = media.viewInsets.bottom;
+  final screen = media.size;
+  final origin = box.localToGlobal(Offset.zero);
   final anchorTop = origin.dy;
   final anchorBottom = origin.dy + box.size.height;
+  final usableBottom = screen.height - keyboardInset;
   final spaceBelow = usableBottom - anchorBottom;
   final spaceAbove = anchorTop - media.padding.top;
   final placeBelow = spaceBelow >= 88 && spaceBelow >= spaceAbove;
@@ -39,47 +44,54 @@ Future<T?> showFollowPopup<T>({
     (placeBelow ? spaceBelow : spaceAbove) - gap - 8,
   ).clamp(96.0, maxHeight);
 
-  return showGeneralDialog<T>(
-    context: context,
-    barrierDismissible: true,
-    barrierLabel: 'dismiss',
-    barrierColor: const Color(0x33000000),
-    transitionDuration: const Duration(milliseconds: 140),
-    pageBuilder: (dialogContext, _, _) {
-      return SizedBox.expand(
-        child: Stack(
-          children: [
-            Positioned(
-              left: left,
-              width: width,
-              top: placeBelow ? anchorBottom + gap : null,
-              bottom: placeBelow ? null : screen.height - anchorTop + gap,
-              child: Material(
-                color: PilotColors.card,
-                elevation: 12,
-                shadowColor: Colors.black54,
-                clipBehavior: Clip.antiAlias,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: const BorderSide(color: PilotColors.line),
-                ),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxHeight: heightCap),
-                  child: builder(dialogContext),
-                ),
+  final top = placeBelow ? anchorBottom + gap : null;
+  final bottom = placeBelow ? null : screen.height - anchorTop + gap;
+
+  final completer = Completer<T?>();
+  late OverlayEntry entry;
+
+  void dismiss([T? value]) {
+    if (!completer.isCompleted) completer.complete(value);
+    entry.remove();
+  }
+
+  entry = OverlayEntry(
+    builder: (_) {
+      return Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () => dismiss(),
+            ),
+          ),
+          Positioned(
+            left: left,
+            width: width,
+            top: top,
+            bottom: bottom,
+            child: Material(
+              color: PilotColors.card,
+              elevation: 12,
+              shadowColor: Colors.black54,
+              clipBehavior: Clip.antiAlias,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: const BorderSide(color: PilotColors.line),
+              ),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: heightCap),
+                child: builder(dismiss),
               ),
             ),
-          ],
-        ),
-      );
-    },
-    transitionBuilder: (context, animation, _, child) {
-      return FadeTransition(
-        opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
-        child: child,
+          ),
+        ],
       );
     },
   );
+
+  overlayState.insert(entry);
+  return completer.future;
 }
 
 class FollowMenuTile extends StatelessWidget {

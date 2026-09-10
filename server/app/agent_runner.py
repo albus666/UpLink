@@ -10,6 +10,9 @@ from .config import Settings
 from .db import Store
 
 
+# stream-json 单行事件可能超过 asyncio 默认 64 KiB 行缓冲。
+_STDIO_LINE_LIMIT = 16 * 1024 * 1024
+
 PROMPT_PREFIX = """你在一台服务器的本地工作区里执行任务。手机只是 Uplink 客户端，真正改文件、跑命令的是你。
 
 工作区绝对路径：{workspace}
@@ -156,6 +159,7 @@ class AgentRunner:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.settings.workspace,
                 env=env,
+                limit=_STDIO_LINE_LIMIT,
                 **kwargs,
             )
         except FileNotFoundError:
@@ -198,6 +202,17 @@ class AgentRunner:
                 timeout = 2 if self._cancel_requested else self.settings.agent_timeout_sec
                 try:
                     raw = await asyncio.wait_for(proc.stdout.readline(), timeout=timeout)
+                except asyncio.LimitOverrunError as exc:
+                    self.store.append_log(
+                        task_id,
+                        "system",
+                        f"跳过一条过大的 stream-json 输出（{exc.consumed} 字节）",
+                    )
+                    try:
+                        await proc.stdout.readexactly(exc.consumed)
+                    except (asyncio.IncompleteReadError, ValueError):
+                        break
+                    continue
                 except asyncio.TimeoutError:
                     if self._cancel_requested:
                         await _ensure_dead(proc)

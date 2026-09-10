@@ -400,18 +400,18 @@ class HistoryDrawerState extends State<HistoryDrawer> {
       width: 132,
       align: FollowAlign.end,
       gap: 8,
-      builder: (popup) => Padding(
+      builder: (dismiss) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            FollowMenuTile(label: '重命名', onTap: () => Navigator.pop(popup, 'rename')),
-            FollowMenuTile(label: thread.pinned ? '取消置顶' : '置顶', onTap: () => Navigator.pop(popup, 'pin')),
-            FollowMenuTile(label: '多选', onTap: () => Navigator.pop(popup, 'select')),
+            FollowMenuTile(label: '重命名', onTap: () => dismiss('rename')),
+            FollowMenuTile(label: thread.pinned ? '取消置顶' : '置顶', onTap: () => dismiss('pin')),
+            FollowMenuTile(label: '多选', onTap: () => dismiss('select')),
             FollowMenuTile(
               label: '删除',
               color: PilotColors.bad,
-              onTap: () => Navigator.pop(popup, 'delete'),
+              onTap: () => dismiss('delete'),
             ),
           ],
         ),
@@ -456,13 +456,13 @@ class HistoryDrawerState extends State<HistoryDrawer> {
                     width: 148,
                     align: FollowAlign.end,
                     gap: 8,
-                    builder: (popup) => Padding(
+                    builder: (dismiss) => Padding(
                       padding: const EdgeInsets.symmetric(vertical: 4),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          FollowMenuTile(label: '切换连接', onTap: () => Navigator.pop(popup, 'links')),
-                          FollowMenuTile(label: '设置', onTap: () => Navigator.pop(popup, 'settings')),
+                          FollowMenuTile(label: '切换连接', onTap: () => dismiss('links')),
+                          FollowMenuTile(label: '设置', onTap: () => dismiss('settings')),
                         ],
                       ),
                     ),
