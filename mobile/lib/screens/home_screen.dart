@@ -448,16 +448,25 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     final session = context.read<SessionController>();
-    final resumeId = (!_wantNew) ? _current?.latestSessionId : null;
+    final mode = session.chatMode;
+    String? resumeId;
+    var outgoing = prompt;
+    if (!_wantNew && _current != null) {
+      final turns = _current!.turns;
+      if (turns.isNotEmpty && turns.last.mode != mode) {
+        outgoing = '${modeSwitchHint(mode)}\n\n$prompt';
+      }
+      resumeId = _current!.latestSessionId;
+    }
     setState(() => _busy = true);
     try {
       final task = await session.client.createTask(
-        prompt: prompt,
+        prompt: outgoing,
         uploadIds: _uploads.map((item) => item.id).toList(),
         resume: resumeId != null,
         sessionId: resumeId,
         model: _workspace?.model,
-        mode: session.chatMode,
+        mode: mode,
       );
       if (!mounted) return;
       _prompt.clear();

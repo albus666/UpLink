@@ -60,10 +60,21 @@ class ConversationThread {
   }
 }
 
+final _modeSwitchHint = RegExp(
+  r'^【系统：已切换到 (Ask|Agent) 模式[^】]*】\n\n',
+);
+
+String modeSwitchHint(String mode) {
+  return mode == 'ask'
+      ? '【系统：用户已从 Agent 切换到 Ask 模式。本轮起只读分析，不要修改、创建、删除任何文件，不要运行会改动系统的命令。】'
+      : '【系统：用户已从 Ask 切换到 Agent 模式。本轮起可以修改文件、运行命令并完成任务，不要仍按 Ask 只读方式回答。】';
+}
+
 String displayPrompt(String prompt) {
+  var text = prompt.replaceFirst(_modeSwitchHint, '');
   const marker = '\n\n刚上传到工作区的文件：';
-  final index = prompt.indexOf(marker);
-  return (index >= 0 ? prompt.substring(0, index) : prompt).trim();
+  final index = text.indexOf(marker);
+  return (index >= 0 ? text.substring(0, index) : text).trim();
 }
 
 String stripAnsi(String text) {
