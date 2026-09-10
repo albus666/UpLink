@@ -15,7 +15,6 @@ ExecStart=/opt/uplink/server/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --por
 Restart=always
 RestartSec=3
 TimeoutStartSec=60
-NoNewPrivileges=true
 PrivateTmp=true
 
 [Install]
