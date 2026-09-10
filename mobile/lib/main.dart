@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'screens/home_screen.dart';
-import 'screens/login_screen.dart';
 import 'state/aws_settings.dart';
 import 'state/session.dart';
 import 'theme.dart';
@@ -26,14 +25,14 @@ class UplinkApp extends StatelessWidget {
         title: 'Uplink',
         debugShowCheckedModeBanner: false,
         theme: buildPilotTheme(),
-        home: const _Gate(),
+        home: const _Boot(),
       ),
     );
   }
 }
 
-class _Gate extends StatelessWidget {
-  const _Gate();
+class _Boot extends StatelessWidget {
+  const _Boot();
 
   @override
   Widget build(BuildContext context) {
@@ -43,6 +42,6 @@ class _Gate extends StatelessWidget {
         body: Center(child: CircularProgressIndicator()),
       );
     }
-    return session.isLoggedIn ? const HomeScreen() : const LoginScreen();
+    return const HomeScreen();
   }
 }

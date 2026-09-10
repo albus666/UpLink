@@ -1,0 +1,322 @@
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+
+import '../theme.dart';
+
+class MdSpan {
+  const MdSpan(this.kind, this.text);
+
+  final String kind;
+  final String text;
+}
+
+List<MdSpan> parseMarkdownSpans(String raw) {
+  final source = raw.replaceAll('\r\n', '\n');
+  final spans = <MdSpan>[];
+  final fence = RegExp(r'```[^\n]*\n([\s\S]*?)```');
+  var cursor = 0;
+  for (final match in fence.allMatches(source)) {
+    if (match.start > cursor) {
+      spans.addAll(_parseFlow(source.substring(cursor, match.start)));
+    }
+    spans.add(MdSpan('fence', (match.group(1) ?? '').trimRight()));
+    cursor = match.end;
+  }
+  if (cursor < source.length) {
+    spans.addAll(_parseFlow(source.substring(cursor)));
+  }
+  return spans;
+}
+
+List<MdSpan> _parseFlow(String text) {
+  final lines = text.split('\n');
+  final out = <MdSpan>[];
+  var buffer = <String>[];
+  var i = 0;
+
+  void flushText() {
+    if (buffer.isEmpty) return;
+    out.addAll(_parseInline(buffer.join('\n')));
+    buffer = [];
+  }
+
+  while (i < lines.length) {
+    if (_isTableLine(lines[i])) {
+      final start = i;
+      i++;
+      while (i < lines.length && (_isTableLine(lines[i]) || _isSepLine(lines[i]))) {
+        i++;
+      }
+      final chunk = lines.sublist(start, i);
+      final tableLines = chunk.where(_isTableLine).length;
+      if (tableLines >= 2 || (tableLines >= 1 && chunk.any(_isSepLine))) {
+        flushText();
+        out.add(MdSpan('table', jsonEncode(_tableRows(chunk))));
+      } else {
+        buffer.addAll(chunk);
+      }
+    } else {
+      buffer.add(lines[i]);
+      i++;
+    }
+  }
+  flushText();
+  return out;
+}
+
+bool _isTableLine(String line) {
+  final trimmed = line.trim();
+  if (!trimmed.contains('|')) return false;
+  if (trimmed.startsWith('|')) return trimmed.length > 1;
+  return RegExp(r'^\S.*\|.*\S').hasMatch(trimmed);
+}
+
+bool _isSepLine(String line) {
+  return RegExp(r'^\s*\|?(\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?\s*$').hasMatch(line.trim());
+}
+
+List<List<String>> _tableRows(List<String> lines) {
+  return [
+    for (final line in lines)
+      if (!_isSepLine(line) && _isTableLine(line)) _splitCells(line),
+  ];
+}
+
+List<String> _splitCells(String line) {
+  var trimmed = line.trim();
+  if (trimmed.startsWith('|')) trimmed = trimmed.substring(1);
+  if (trimmed.endsWith('|') && (trimmed.length < 2 || trimmed[trimmed.length - 2] != '\\')) {
+    trimmed = trimmed.substring(0, trimmed.length - 1);
+  }
+  final cells = <String>[];
+  final buf = StringBuffer();
+  var escape = false;
+  var inCode = false;
+  for (final unit in trimmed.runes) {
+    final ch = String.fromCharCode(unit);
+    if (escape) {
+      buf.write(ch);
+      escape = false;
+      continue;
+    }
+    if (ch == '\\') {
+      escape = true;
+      continue;
+    }
+    if (ch == '`') {
+      inCode = !inCode;
+      buf.write(ch);
+      continue;
+    }
+    if (ch == '|' && !inCode) {
+      cells.add(buf.toString().trim());
+      buf.clear();
+      continue;
+    }
+    buf.write(ch);
+  }
+  cells.add(buf.toString().trim());
+  return cells;
+}
+
+final _inlinePattern = RegExp(
+  r'`([^`]+)`'
+  r'|\[([^\]]+)\]\(([^)\s]+)\)'
+  r'|\*\*\*(.+?)\*\*\*'
+  r'|\*\*(.+?)\*\*'
+  r'|__(.+?)__'
+  r'|~~(.+?)~~'
+  r'|(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)',
+);
+
+List<MdSpan> _parseInline(String text) {
+  final source = text.replaceAllMapped(RegExp(r'<br\s*/?>', caseSensitive: false), (_) => '\n');
+  final spans = <MdSpan>[];
+  var cursor = 0;
+  for (final match in _inlinePattern.allMatches(source)) {
+    if (match.start > cursor) {
+      spans.add(MdSpan('text', source.substring(cursor, match.start)));
+    }
+    if (match.group(1) != null) {
+      spans.add(MdSpan('code', match.group(1)!));
+    } else if (match.group(2) != null) {
+      spans.add(MdSpan('link', match.group(2)!));
+    } else if (match.group(4) != null) {
+      spans.add(MdSpan('bolditalic', match.group(4)!));
+    } else if (match.group(5) != null || match.group(6) != null) {
+      spans.add(MdSpan('bold', match.group(5) ?? match.group(6)!));
+    } else if (match.group(7) != null) {
+      spans.add(MdSpan('strike', match.group(7)!));
+    } else if (match.group(8) != null) {
+      spans.add(MdSpan('italic', match.group(8)!));
+    }
+    cursor = match.end;
+  }
+  if (cursor < source.length) {
+    spans.add(MdSpan('text', source.substring(cursor)));
+  }
+  return spans;
+}
+
+TextSpan _inlineSpan(String text, TextStyle base) {
+  return _spansToText(_parseInline(text), base);
+}
+
+TextSpan _spansToText(List<MdSpan> spans, TextStyle base) {
+  return TextSpan(
+    children: [
+      for (final span in spans)
+        if (span.kind == 'bold')
+          TextSpan(text: span.text, style: base.copyWith(fontWeight: FontWeight.w700))
+        else if (span.kind == 'italic')
+          TextSpan(text: span.text, style: base.copyWith(fontStyle: FontStyle.italic))
+        else if (span.kind == 'bolditalic')
+          TextSpan(text: span.text, style: base.copyWith(fontWeight: FontWeight.w700, fontStyle: FontStyle.italic))
+        else if (span.kind == 'strike')
+          TextSpan(text: span.text, style: base.copyWith(decoration: TextDecoration.lineThrough))
+        else if (span.kind == 'code')
+          TextSpan(
+            text: span.text,
+            style: base.copyWith(
+              fontFamily: 'monospace',
+              fontSize: (base.fontSize ?? 15) - 2,
+              height: 1.45,
+              color: const Color(0xFFB8C7FF),
+              backgroundColor: PilotColors.surface,
+            ),
+          )
+        else if (span.kind == 'link')
+          TextSpan(
+            text: span.text,
+            style: base.copyWith(color: PilotColors.info, decoration: TextDecoration.underline),
+          )
+        else if (span.kind != 'table' && span.kind != 'fence')
+          TextSpan(text: span.text, style: base),
+    ],
+  );
+}
+
+class MarkdownText extends StatelessWidget {
+  const MarkdownText(this.data, {super.key, this.style});
+
+  final String data;
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
+    final base = style ?? const TextStyle(height: 1.6, fontSize: 15, color: PilotColors.text);
+    final spans = parseMarkdownSpans(data);
+    if (spans.isEmpty) {
+      return Text(data, style: base);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final block in _groupBlocks(spans))
+          if (block.length == 1 && block.first.kind == 'fence')
+            _codeBlock(block.first.text, base)
+          else if (block.length == 1 && block.first.kind == 'table')
+            _tableBlock(block.first.text, base)
+          else
+            SelectableText.rich(_spansToText(block, base)),
+      ],
+    );
+  }
+
+  Widget _codeBlock(String text, TextStyle base) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: PilotColors.surface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: PilotColors.line),
+      ),
+      child: SelectableText(
+        text,
+        style: base.copyWith(fontFamily: 'monospace', fontSize: 13, height: 1.45, color: PilotColors.text),
+      ),
+    );
+  }
+
+  Widget _tableBlock(String encoded, TextStyle base) {
+    final raw = jsonDecode(encoded);
+    if (raw is! List || raw.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final rows = raw
+        .whereType<List>()
+        .map((row) => row.map((cell) => cell.toString()).toList())
+        .where((row) => row.isNotEmpty)
+        .toList();
+    if (rows.isEmpty) return const SizedBox.shrink();
+    final width = rows.map((row) => row.length).reduce((a, b) => a > b ? a : b);
+    final cellStyle = base.copyWith(fontSize: 13, height: 1.35);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final table = Table(
+          defaultColumnWidth: const IntrinsicColumnWidth(),
+          defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+          border: TableBorder.symmetric(inside: const BorderSide(color: PilotColors.line)),
+          children: [
+            for (var r = 0; r < rows.length; r++)
+              TableRow(
+                decoration: BoxDecoration(color: r == 0 ? PilotColors.surface : Colors.transparent),
+                children: [
+                  for (var c = 0; c < width; c++)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      child: _cellText(
+                        c < rows[r].length ? rows[r][c] : '',
+                        r == 0 ? cellStyle.copyWith(fontWeight: FontWeight.w700) : cellStyle,
+                      ),
+                    ),
+                ],
+              ),
+          ],
+        );
+        final minWidth = constraints.maxWidth.isFinite ? constraints.maxWidth : 0.0;
+        return Container(
+          margin: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            border: Border.all(color: PilotColors.line),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minWidth: minWidth),
+              child: table,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _cellText(String raw, TextStyle style) {
+    final text = raw.trim();
+    if (text.isEmpty) return const SizedBox.shrink();
+    return Text.rich(_inlineSpan(text, style));
+  }
+}
+
+List<List<MdSpan>> _groupBlocks(List<MdSpan> spans) {
+  final blocks = <List<MdSpan>>[];
+  var current = <MdSpan>[];
+  for (final span in spans) {
+    if (span.kind == 'fence' || span.kind == 'table') {
+      if (current.isNotEmpty) {
+        blocks.add(current);
+        current = [];
+      }
+      blocks.add([span]);
+    } else {
+      current.add(span);
+    }
+  }
+  if (current.isNotEmpty) blocks.add(current);
+  return blocks;
+}

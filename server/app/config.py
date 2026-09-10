@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     def db_path(self) -> Path:
         return self.data_dir / "pilot.db"
 
+    @property
+    def model_path(self) -> Path:
+        return self.data_dir / "agent_model"
+
 
 def load_settings() -> Settings:
     settings = Settings()  # type: ignore[call-arg]
@@ -55,4 +59,18 @@ def load_settings() -> Settings:
     ignore = settings.upload_dir / ".gitignore"
     if not ignore.exists():
         ignore.write_text("*\n!.gitignore\n", encoding="utf-8")
+    saved = settings.model_path
+    if saved.exists():
+        value = saved.read_text(encoding="utf-8").strip()
+        if value:
+            settings.agent_model = value
     return settings
+
+
+def apply_model(settings: Settings, model: str) -> str:
+    cleaned = model.strip()
+    if not cleaned or len(cleaned) > 80:
+        raise ValueError("模型无效")
+    settings.agent_model = cleaned
+    settings.model_path.write_text(f"{cleaned}\n", encoding="utf-8")
+    return cleaned

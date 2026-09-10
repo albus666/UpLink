@@ -6,12 +6,15 @@ from typing import Annotated, Any, Callable
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from .agent_models import ModelCatalog, workspace_models
 from .agent_runner import AgentRunner
 from .auth import extract_bearer, token_matches
-from .config import Settings, load_settings
+from .config import Settings, apply_model, load_settings
 from .db import Store
+from .files import download_path, list_dir, read_text, write_text
 from .git_ops import GitError, commit as git_commit
 from .git_ops import is_git_repo
 from .git_ops import pull as git_pull
@@ -25,6 +28,7 @@ class AppState:
         self.settings = settings
         self.store = Store(settings.db_path)
         self.runner = AgentRunner(self.store, settings)
+        self.models = ModelCatalog(settings)
 
 
 @asynccontextmanager
@@ -32,6 +36,7 @@ async def lifespan(app: FastAPI):
     settings = load_settings()
     state = AppState(settings)
     state.runner.start()
+    state.models.start()
     app.state.pilot = state
     yield
     await state.runner.shutdown()
@@ -74,10 +79,26 @@ class TaskBody(BaseModel):
     upload_ids: list[str] = Field(default_factory=list)
     resume: bool = False
     session_id: str | None = None
+    model: str | None = Field(default=None, max_length=80)
+    mode: str = Field(default="agent", max_length=16)
+
+
+class ModelBody(BaseModel):
+    model: str = Field(min_length=1, max_length=80)
 
 
 class CommitBody(BaseModel):
     message: str = Field(min_length=1, max_length=200)
+
+
+class ThreadBody(BaseModel):
+    title: str | None = Field(default=None, max_length=80)
+    pinned: bool | None = None
+
+
+class FileWriteBody(BaseModel):
+    path: str = Field(min_length=1, max_length=1000)
+    content: str = Field(max_length=1_000_000)
 
 
 @app.get("/api/health")
@@ -102,11 +123,23 @@ def workspace(state: State, _: Auth) -> dict[str, Any]:
         "model": settings.agent_model,
         "git": None,
     }
-    if is_git_repo(settings.workspace):
-        try:
-            info["git"] = git_status(settings.workspace)
-        except GitError as exc:
-            info["git_error"] = str(exc)
+    info.update(workspace_models(state.models))
+    return info
+
+
+@app.put("/api/workspace/model")
+async def set_workspace_model(body: ModelBody, state: State, _: Auth) -> dict[str, Any]:
+    try:
+        apply_model(state.settings, body.model)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    info = {
+        "path": str(state.settings.workspace),
+        "exists": state.settings.workspace.exists(),
+        "agent_bin": state.settings.agent_bin,
+        "git": None,
+    }
+    info.update(workspace_models(state.models))
     return info
 
 
@@ -124,11 +157,15 @@ async def create_task(body: TaskBody, state: State, _: Auth) -> dict[str, Any]:
     uploads = state.store.get_uploads(body.upload_ids)
     if body.upload_ids and len(uploads) != len(set(body.upload_ids)):
         raise HTTPException(status_code=400, detail="有文件编号不存在")
+    mode = "ask" if body.mode.strip().lower() == "ask" else "agent"
     if uploads:
         lines = "\n".join(
             f"- {item['relative_path']}（原名 {item['original_name']}）" for item in uploads
         )
-        prompt = f"{prompt}\n\n刚上传到工作区的文件：\n{lines}\n请按任务处理这些文件。"
+        if mode == "ask":
+            prompt = f"{prompt}\n\n刚上传到工作区的文件：\n{lines}\n这些文件只供阅读分析，不要修改。"
+        else:
+            prompt = f"{prompt}\n\n刚上传到工作区的文件：\n{lines}\n请按任务处理这些文件。"
 
     resume_of = None
     if body.resume:
@@ -136,7 +173,16 @@ async def create_task(body: TaskBody, state: State, _: Auth) -> dict[str, Any]:
         if not resume_of:
             raise HTTPException(status_code=400, detail="还没有可续跑的会话")
 
-    task = state.store.create_task(prompt, resume_of=resume_of)
+    if body.model:
+        try:
+            apply_model(state.settings, body.model)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if state.store.has_active_task():
+        raise HTTPException(status_code=409, detail="上一轮还在执行，先点停止或等它结束")
+
+    task = state.store.create_task(prompt, resume_of=resume_of, mode=mode)
     await state.runner.enqueue(task["id"])
     return task
 
@@ -156,10 +202,34 @@ async def cancel_task(task_id: str, state: State, _: Auth) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="任务不存在")
     ok = await state.runner.cancel(task_id)
     if not ok and task["status"] in {"succeeded", "failed", "cancelled"}:
-        raise HTTPException(status_code=400, detail="任务已经结束")
+        return {"ok": True, "already_done": True}
     if not ok:
-        raise HTTPException(status_code=409, detail="当前无法取消该任务")
+        raise HTTPException(status_code=409, detail="当前无法停止这一轮")
     return {"ok": True}
+
+
+@app.patch("/api/threads/{thread_id}")
+def patch_thread(thread_id: str, body: ThreadBody, state: State, _: Auth) -> dict[str, Any]:
+    if body.title is None and body.pinned is None:
+        raise HTTPException(status_code=400, detail="没有要改的内容")
+    task = state.store.update_thread(thread_id, title=body.title, pinned=body.pinned)
+    if task is None:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    return task
+
+
+@app.delete("/api/threads/{thread_id}")
+def delete_thread(thread_id: str, state: State, _: Auth) -> dict[str, Any]:
+    bundle = state.store.thread_bundle(thread_id)
+    if bundle is None:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    _root, ids = bundle
+    for task_id in ids:
+        task = state.store.get_task(task_id, include_logs=False)
+        if task and task["status"] in {"queued", "running"}:
+            raise HTTPException(status_code=409, detail="先停止这一轮再删除")
+    deleted = state.store.delete_thread(thread_id)
+    return {"ok": True, "deleted": deleted}
 
 
 @app.post("/api/uploads")
@@ -206,6 +276,49 @@ async def upload_file(
 @app.get("/api/uploads")
 def list_uploads(state: State, _: Auth) -> dict[str, Any]:
     return {"items": state.store.list_uploads()}
+
+
+@app.get("/api/files")
+def list_files(state: State, _: Auth, path: str = "") -> dict[str, Any]:
+    try:
+        return list_dir(state.settings.workspace, path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except NotADirectoryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (PermissionError, ValueError) as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@app.get("/api/files/content")
+def get_file_content(state: State, _: Auth, path: str) -> dict[str, Any]:
+    try:
+        return read_text(state.settings.workspace, path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (PermissionError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/files/content")
+def put_file_content(body: FileWriteBody, state: State, _: Auth) -> dict[str, Any]:
+    try:
+        return write_text(state.settings.workspace, body.path, body.content)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (PermissionError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/files/download")
+def download_file(state: State, _: Auth, path: str) -> FileResponse:
+    try:
+        target = download_path(state.settings.workspace, path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (PermissionError, ValueError) as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return FileResponse(target, filename=target.name, media_type="application/octet-stream")
 
 
 @app.get("/api/git")

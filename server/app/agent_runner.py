@@ -25,6 +25,20 @@ PROMPT_PREFIX = """你在一台服务器的本地工作区里执行任务。手�
 {prompt}
 """
 
+ASK_PREFIX = """你在一台服务器的本地工作区里回答问题。当前是 Ask 模式。
+
+工作区绝对路径：{workspace}
+
+硬性规则：
+- 只阅读和分析，不要修改、创建、删除任何文件
+- 不要运行会改动系统或仓库的命令，不要 git commit / push
+- 不要读取或输出密钥、token、.env、私钥
+- 回复用中文，直接给出结论
+
+用户问题：
+{prompt}
+"""
+
 
 class AgentRunner:
     def __init__(self, store: Store, settings: Settings) -> None:
@@ -57,15 +71,19 @@ class AgentRunner:
         task = self.store.get_task(task_id, include_logs=False)
         if task is None:
             return False
+        if task["status"] in {"succeeded", "failed", "cancelled"}:
+            return False
         if task["status"] == "queued":
             self.store.mark_finished(task_id, "cancelled", error="已取消")
             self.store.append_log(task_id, "system", "任务在排队时被取消")
             return True
-        if self._current_task_id != task_id or self._current_proc is None:
+        if self._current_task_id != task_id:
             return False
         self._cancel_requested = True
-        self.store.append_log(task_id, "system", "正在停止 Agent…")
-        _stop_process(self._current_proc)
+        self.store.append_log(task_id, "system", "已停止这一轮")
+        proc = self._current_proc
+        if proc is not None:
+            asyncio.create_task(_ensure_dead(proc))
         return True
 
     async def _loop(self) -> None:
@@ -86,24 +104,35 @@ class AgentRunner:
 
     async def _run(self, task: dict[str, Any]) -> None:
         task_id = task["id"]
+        fresh = self.store.get_task(task_id, include_logs=False)
+        if fresh is None or fresh["status"] != "queued":
+            return
         self._current_task_id = task_id
         self.store.mark_running(task_id)
-        self.store.append_log(task_id, "system", "开始调用 Cursor Agent")
+        mode = "ask" if (fresh.get("mode") or "agent") == "ask" else "agent"
+        if mode == "ask":
+            self.store.append_log(task_id, "system", "Ask 模式：只分析，不改文件")
+        else:
+            self.store.append_log(task_id, "system", "Agent 模式：可以改文件")
 
-        prompt = PROMPT_PREFIX.format(
+        prefix = ASK_PREFIX if mode == "ask" else PROMPT_PREFIX
+        prompt = prefix.format(
             workspace=self.settings.workspace,
             prompt=task["prompt"],
         )
         cmd = [
             self.settings.agent_bin,
             "-p",
-            "--force",
             "--trust",
             "--workspace",
             str(self.settings.workspace),
             "--output-format",
             "stream-json",
         ]
+        if mode == "ask":
+            cmd.extend(["--mode", "ask"])
+        else:
+            cmd.append("--force")
         if self.settings.agent_model:
             cmd.extend(["--model", self.settings.agent_model])
         resume = task.get("resume_of") or None
@@ -139,6 +168,11 @@ class AgentRunner:
             return
 
         self._current_proc = proc
+        if self._cancel_requested:
+            await _ensure_dead(proc)
+            self.store.mark_finished(task_id, "cancelled", error="已取消")
+            return
+
         session_id: str | None = None
         result_text = ""
         stderr_buf = ""
@@ -161,10 +195,19 @@ class AgentRunner:
 
         try:
             while True:
-                raw = await asyncio.wait_for(
-                    proc.stdout.readline(),
-                    timeout=self.settings.agent_timeout_sec,
-                )
+                timeout = 2 if self._cancel_requested else self.settings.agent_timeout_sec
+                try:
+                    raw = await asyncio.wait_for(proc.stdout.readline(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    if self._cancel_requested:
+                        await _ensure_dead(proc)
+                        break
+                    _stop_process(proc)
+                    self.store.append_log(task_id, "error", "Agent 超时，已停止")
+                    self.store.mark_finished(task_id, "failed", error="Agent 超时")
+                    await _wait_silent(proc)
+                    await _wait_silent_task(stderr_task)
+                    return
                 if not raw:
                     break
                 line = raw.decode("utf-8", errors="replace").strip()
@@ -178,8 +221,12 @@ class AgentRunner:
                 if extra.get("session_id") and not session_id:
                     session_id = str(extra["session_id"])
                     self.store.set_session_id(task_id, session_id)
-                if extra.get("result"):
+                if extra.get("result") is not None:
                     result_text = str(extra["result"])
+                if extra.get("done"):
+                    if text:
+                        self.store.append_log(task_id, kind, text)
+                    break
                 if kind == "assistant":
                     assistant_bits.append(text)
                 if text:
@@ -193,10 +240,34 @@ class AgentRunner:
             return
 
         await _wait_silent_task(stderr_task)
-        code = await proc.wait()
+        if self._cancel_requested:
+            await _ensure_dead(proc)
+            self.store.mark_finished(task_id, "cancelled", error="已停止", session_id=session_id)
+            return
+
+        if result_text or assistant_bits:
+            await _ensure_dead(proc)
+            if not result_text:
+                result_text = "".join(assistant_bits).strip()
+            self.store.append_log(task_id, "system", "这一轮完成")
+            self.store.mark_finished(
+                task_id,
+                "succeeded",
+                result_text=result_text,
+                session_id=session_id,
+            )
+            return
+
+        try:
+            code = await asyncio.wait_for(proc.wait(), timeout=8)
+        except asyncio.TimeoutError:
+            await _ensure_dead(proc)
+            self.store.append_log(task_id, "error", "Agent 进程未退出，已强制结束")
+            self.store.mark_finished(task_id, "failed", error="Agent 进程未退出", session_id=session_id)
+            return
 
         if self._cancel_requested:
-            self.store.mark_finished(task_id, "cancelled", error="已取消", session_id=session_id)
+            self.store.mark_finished(task_id, "cancelled", error="已停止", session_id=session_id)
             return
 
         if not result_text:
@@ -207,7 +278,7 @@ class AgentRunner:
             self.store.mark_finished(task_id, "failed", result_text=result_text, error=error, session_id=session_id)
             return
 
-        self.store.append_log(task_id, "system", "任务完成")
+        self.store.append_log(task_id, "system", "这一轮完成")
         self.store.mark_finished(
             task_id,
             "succeeded",
@@ -245,6 +316,14 @@ def _format_event(event: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
         text = _message_text(event.get("message"))
         return "assistant", text, extra
 
+    if etype == "thinking":
+        if subtype in {"completed", "end", "delta"} and not event.get("text"):
+            return "system", "", extra
+        text = str(event.get("text") or event.get("thought") or "").strip()
+        if not text:
+            return "system", "", extra
+        return "thought", text[:300], extra
+
     if etype == "tool_call":
         label = _tool_label(event.get("tool_call") or {})
         verb = "开始" if subtype == "started" else "完成"
@@ -253,14 +332,15 @@ def _format_event(event: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     if etype == "result":
         result = event.get("result") or ""
         extra["result"] = result
+        extra["done"] = True
         duration = event.get("duration_ms")
         suffix = f"（{duration}ms）" if duration else ""
-        return "system", f"Agent 结束{suffix}", extra
+        return "system", f"这一轮结束{suffix}", extra
 
     if etype == "user":
         return "system", "", extra
 
-    return "raw", json.dumps(event, ensure_ascii=False)[:500], extra
+    return "raw", "", extra
 
 
 def _message_text(message: Any) -> str:
@@ -285,17 +365,29 @@ def _tool_label(tool_call: dict[str, Any]) -> str:
         "globToolCall": "匹配文件",
         "lsToolCall": "列出目录",
         "deleteToolCall": "删除",
+        "webSearchToolCall": "搜索网页",
+        "webFetchToolCall": "打开网页",
+        "mcpToolCall": "MCP",
     }
     for key, verb in mapping.items():
         if key in tool_call:
             args = (tool_call[key] or {}).get("args") or {}
-            target = args.get("path") or args.get("command") or args.get("query") or ""
+            target = args.get("path") or args.get("command") or args.get("query") or args.get("url") or args.get("searchTerm") or ""
             return f"{verb} {target}".strip()
     func = tool_call.get("function") or {}
     if func:
         return str(func.get("name") or "工具")
     keys = [key for key in tool_call.keys() if key.endswith("ToolCall")]
-    return keys[0] if keys else "工具调用"
+    if not keys:
+        return "工具调用"
+    key = keys[0]
+    name = key[: -len("ToolCall")]
+    pretty = {
+        "webSearch": "搜索网页",
+        "webFetch": "打开网页",
+        "readFile": "读取",
+    }.get(name, name)
+    return pretty
 
 
 def _stop_process(proc: asyncio.subprocess.Process) -> None:
@@ -310,6 +402,37 @@ def _stop_process(proc: asyncio.subprocess.Process) -> None:
         return
     except OSError:
         proc.kill()
+
+
+def _kill_process(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is not None:
+        return
+    try:
+        if os.name != "nt" and proc.pid:
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            proc.kill()
+    except ProcessLookupError:
+        return
+    except OSError:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+
+async def _ensure_dead(proc: asyncio.subprocess.Process) -> None:
+    _stop_process(proc)
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=2)
+        return
+    except asyncio.TimeoutError:
+        pass
+    _kill_process(proc)
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=3)
+    except asyncio.TimeoutError:
+        pass
 
 
 async def _wait_silent(proc: asyncio.subprocess.Process) -> None:

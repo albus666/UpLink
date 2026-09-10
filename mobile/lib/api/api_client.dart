@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -51,13 +52,58 @@ class ApiClient {
     _throwIfNeeded(response);
   }
 
+  Future<http.Response> _get(String path, {Duration timeout = const Duration(seconds: 12)}) async {
+    try {
+      return await http.get(_uri(path), headers: _headers).timeout(timeout);
+    } on TimeoutException {
+      throw ApiException('请求超时');
+    }
+  }
+
+  Future<http.Response> _post(String path, {Object? body, Duration timeout = const Duration(seconds: 20)}) async {
+    try {
+      return await http.post(_uri(path), headers: _headers, body: body).timeout(timeout);
+    } on TimeoutException {
+      throw ApiException('请求超时');
+    }
+  }
+
+  Future<http.Response> _patch(String path, {Object? body, Duration timeout = const Duration(seconds: 15)}) async {
+    try {
+      return await http.patch(_uri(path), headers: _headers, body: body).timeout(timeout);
+    } on TimeoutException {
+      throw ApiException('请求超时');
+    }
+  }
+
+  Future<http.Response> _put(String path, {Object? body, Duration timeout = const Duration(seconds: 15)}) async {
+    try {
+      return await http.put(_uri(path), headers: _headers, body: body).timeout(timeout);
+    } on TimeoutException {
+      throw ApiException('请求超时');
+    }
+  }
+
+  Future<http.Response> _delete(String path, {Duration timeout = const Duration(seconds: 15)}) async {
+    try {
+      return await http.delete(_uri(path), headers: _headers).timeout(timeout);
+    } on TimeoutException {
+      throw ApiException('请求超时');
+    }
+  }
+
   Future<WorkspaceInfo> workspace() async {
-    final response = await http.get(_uri('/api/workspace'), headers: _headers);
+    final response = await _get('/api/workspace');
+    return WorkspaceInfo.fromJson(_decode(response) as Map<String, dynamic>);
+  }
+
+  Future<WorkspaceInfo> setModel(String model) async {
+    final response = await _put('/api/workspace/model', body: jsonEncode({'model': model}));
     return WorkspaceInfo.fromJson(_decode(response) as Map<String, dynamic>);
   }
 
   Future<List<RemoteTask>> tasks() async {
-    final response = await http.get(_uri('/api/tasks'), headers: _headers);
+    final response = await _get('/api/tasks');
     final data = _decode(response) as Map<String, dynamic>;
     return (data['items'] as List<dynamic>? ?? const [])
         .whereType<Map<String, dynamic>>()
@@ -69,26 +115,47 @@ class ApiClient {
     required String prompt,
     List<String> uploadIds = const [],
     bool resume = false,
+    String? sessionId,
+    String? model,
+    String mode = 'agent',
   }) async {
-    final response = await http.post(
-      _uri('/api/tasks'),
-      headers: _headers,
+    final response = await _post(
+      '/api/tasks',
       body: jsonEncode({
         'prompt': prompt,
         'upload_ids': uploadIds,
         'resume': resume,
+        'session_id': sessionId,
+        if (model != null && model.isNotEmpty) 'model': model,
+        'mode': mode,
       }),
     );
     return RemoteTask.fromJson(_decode(response) as Map<String, dynamic>);
   }
 
   Future<RemoteTask> task(String id) async {
-    final response = await http.get(_uri('/api/tasks/$id'), headers: _headers);
+    final response = await _get('/api/tasks/$id');
     return RemoteTask.fromJson(_decode(response) as Map<String, dynamic>);
   }
 
   Future<void> cancel(String id) async {
-    final response = await http.post(_uri('/api/tasks/$id/cancel'), headers: _headers);
+    final response = await _post('/api/tasks/$id/cancel', timeout: const Duration(seconds: 8));
+    _decode(response);
+  }
+
+  Future<void> patchThread(String id, {String? title, bool? pinned}) async {
+    final response = await _patch(
+      '/api/threads/$id',
+      body: jsonEncode({
+        'title': ?title,
+        'pinned': ?pinned,
+      }),
+    );
+    _decode(response);
+  }
+
+  Future<void> deleteThread(String id) async {
+    final response = await _delete('/api/threads/$id');
     _decode(response);
   }
 
@@ -126,6 +193,36 @@ class ApiClient {
   Future<GitStatus> gitPush() async {
     final response = await http.post(_uri('/api/git/push'), headers: _headers);
     return GitStatus.fromJson(_decode(response) as Map<String, dynamic>);
+  }
+
+  Future<RemoteFsListing> listFiles({String path = ''}) async {
+    final response = await http.get(_uri('/api/files').replace(queryParameters: {'path': path}), headers: _headers);
+    return RemoteFsListing.fromJson(_decode(response) as Map<String, dynamic>);
+  }
+
+  Future<RemoteFileContent> readFile(String path) async {
+    final response = await http.get(_uri('/api/files/content').replace(queryParameters: {'path': path}), headers: _headers);
+    return RemoteFileContent.fromJson(_decode(response) as Map<String, dynamic>);
+  }
+
+  Future<void> writeFile(String path, String content) async {
+    final response = await http.put(
+      _uri('/api/files/content'),
+      headers: _headers,
+      body: jsonEncode({'path': path, 'content': content}),
+    );
+    _decode(response);
+  }
+
+  Future<Uint8List> downloadFile(String path) async {
+    final response = await http.get(
+      _uri('/api/files/download').replace(queryParameters: {'path': path}),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      _throwIfNeeded(response);
+    }
+    return response.bodyBytes;
   }
 
   static dynamic _decode(http.Response response) {

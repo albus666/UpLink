@@ -9,9 +9,12 @@ class PilotColors {
   static const muted = Color(0xFF93A0B3);
   static const accent = Color(0xFFF0B429);
   static const accentDim = Color(0xFF3A2F12);
+  static const userBubble = Color(0xFF3B3354);
   static const good = Color(0xFF3DDC97);
+  static const goodDim = Color(0xFF163528);
   static const bad = Color(0xFFFF6B6B);
   static const info = Color(0xFF7C9CFF);
+  static const selected = Color(0xFF1C3354);
 }
 
 ThemeData buildPilotTheme() {
@@ -31,6 +34,9 @@ ThemeData buildPilotTheme() {
       backgroundColor: PilotColors.bg,
       foregroundColor: PilotColors.text,
       elevation: 0,
+      scrolledUnderElevation: 0,
+      surfaceTintColor: Colors.transparent,
+      shadowColor: Colors.transparent,
       centerTitle: false,
     ),
     cardTheme: CardThemeData(
@@ -65,6 +71,16 @@ ThemeData buildPilotTheme() {
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         textStyle: const TextStyle(fontWeight: FontWeight.w700),
+      ),
+    ),
+    popupMenuTheme: PopupMenuThemeData(
+      color: PilotColors.card,
+      surfaceTintColor: Colors.transparent,
+      elevation: 8,
+      textStyle: const TextStyle(color: PilotColors.text, fontSize: 13, fontWeight: FontWeight.w500),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: const BorderSide(color: PilotColors.line),
       ),
     ),
   );
